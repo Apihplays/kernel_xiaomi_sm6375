@@ -1,0 +1,17 @@
+&qupv3_se0_i2c_active {
+	config {
+		input-enable;
+	};
+};
+
+&qupv3_se0_i2c_sleep {
+	config {
+		input-enable;
+	};
+};
+
+&qupv3_se8_i2c_active {
+	config {
+		drive-strength = <8>;
+	};
+};
