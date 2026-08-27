@@ -1,6 +1,6 @@
 #!/bin/bash
 # veux kernel build script (Redmi Note 11 Pro 5G)
-# Kernel 5.4.302 · QGKI · XXKSU · Clang/LLVM · ThinLTO
+# Kernel 5.4.302 · QGKI · ksun · Clang/LLVM · ThinLTO
 set -euo pipefail
 
 # ── Toolchain ────────────────────────────────────────────────
