@@ -1308,16 +1308,14 @@ void mem_cgroup_update_lru_size(struct lruvec *lruvec, enum lru_list lru,
 	mz = container_of(lruvec, struct mem_cgroup_per_node, lruvec);
 	lru_size = &mz->lru_zone_size[zid][lru];
 
-	if (nr_pages < 0)
-		*lru_size += nr_pages;
+	if (nr_pages < 0) {
+		if (*lru_size < (unsigned long)(-nr_pages))
+			*lru_size = 0;
+		else
+			*lru_size += nr_pages;
+	}
 
 	size = *lru_size;
-	if (WARN_ONCE(size < 0,
-		"%s(%p, %d, %d): lru_size %ld\n",
-		__func__, lruvec, lru, nr_pages, size)) {
-		VM_BUG_ON(1);
-		*lru_size = 0;
-	}
 
 	if (nr_pages > 0)
 		*lru_size += nr_pages;

@@ -1242,7 +1242,7 @@ static void aw_dev_cali_re_update(struct aw_device *aw_dev)
 {
 	struct aw_cali_desc *desc = &aw_dev->cali_desc;
 
-	if (desc->mode) {
+	if (desc->mode && aw_dev->status == AW_DEV_PW_ON) {
 		if ((desc->cali_re >= aw_dev->re_min) &&
 				(desc->cali_re <= aw_dev->re_max))
 			aw_dsp_write_cali_re(aw_dev, desc->cali_re);

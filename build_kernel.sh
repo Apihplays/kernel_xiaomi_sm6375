@@ -17,6 +17,7 @@ JOBS=$(nproc --all)
 # ── Clean mode ──────────────────────────────────────────────
 if [ "${1:-}" = "clean" ]; then
     echo "[+] Cleaning old build artifacts..."
+    make ARCH=$ARCH mrproper
     rm -rf "$OUT"
     echo "[+] Cleaned. .config will be regenerated."
 fi
