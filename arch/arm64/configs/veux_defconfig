@@ -751,7 +751,7 @@ CONFIG_UBSAN_TRAP=y
 # CONFIG_UBSAN_BOOL is not set
 # CONFIG_UBSAN_ENUM is not set
 
-# KernelSU (requires KPROBES + MODULES dependency chain)
+# KernelSU — build script patches source at compile time
 CONFIG_MODULES=y
 CONFIG_KPROBES=y
 CONFIG_KSU=y
