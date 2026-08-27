@@ -751,8 +751,6 @@ CONFIG_UBSAN_TRAP=y
 # CONFIG_UBSAN_BOOL is not set
 # CONFIG_UBSAN_ENUM is not set
 
-# KernelSU — Kprobes auto-hook mode
-CONFIG_MODULES=y
-CONFIG_KPROBES=y
+# KernelSU — manual hook mode (no kprobe, no modules)
 CONFIG_KSU=y
-CONFIG_KSU_MANUAL_HOOK=n
+CONFIG_KSU_MANUAL_HOOK=y
