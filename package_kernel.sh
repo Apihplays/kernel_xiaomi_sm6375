@@ -69,7 +69,7 @@ cp "$AK3/tools/magiskboot" "$STAGING/tools/" 2>/dev/null || true
 
 # Step 4: Create flashable zip (no compression on Image/dtb — they're already compressed)
 cd "$STAGING"
-ZIP_NAME="XXKSU-veux-$(date +%Y%m%d-%H%M%S).zip"
+ZIP_NAME="ksun-veux-$(date +%Y%m%d-%H%M%S).zip"
 zip -r9 "$KERNEL_DIR/$ZIP_NAME" . 2>/dev/null
 cd "$KERNEL_DIR"
 
