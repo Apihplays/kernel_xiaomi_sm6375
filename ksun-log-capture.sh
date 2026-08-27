@@ -1,211 +1,272 @@
 #!/bin/bash
-# ksun-log-capture.sh — Comprehensive diagnostic & crash log puller for veux
-# Handles: root via `adb root`, root via `su`, non-root fallback
+# ksun-log-capture.sh — Hardened diagnostic & live crash capture for veux
 #
-# Usage:
-#   ./ksun-log-capture.sh [output_dir]
-#   ./ksun-log-capture.sh setup   (run on working kernel before test)
-#   ./ksun-log-capture.sh pull    (run after crash/reboot)
+# Modes:
+#   ./ksun-log-capture.sh monitor  → Streams logs live while you unlock screen (BEST for crash)
+#   ./ksun-log-capture.sh pull     → Pulls complete 14-category post-mortem dump
+#   ./ksun-log-capture.sh setup    → Captures baseline on working kernel
 #
 set -euo pipefail
 
 ACTION="${1:-pull}"
 OUT=""
 
-if [ "$ACTION" = "setup" ] || [ "$ACTION" = "pull" ]; then
+if [ "$ACTION" = "setup" ] || [ "$ACTION" = "pull" ] || [ "$ACTION" = "monitor" ]; then
     OUT="${2:-./diag-$(date +%Y%m%d-%H%M%S)}"
 else
     OUT="$ACTION"
     ACTION="pull"
 fi
 
-# ── Helpers ──────────────────────────────────────────────────
-run_adb() {
-    adb shell "$@" 2>/dev/null || true
+TIMEOUT_SEC=10
+
+# ── Safe execution helpers with timeouts ─────────────────────
+run_adb_cmd() {
+    timeout "$TIMEOUT_SEC" adb shell "$@" 2>/dev/null || true
 }
 
-run_root() {
-    # Try 1: direct shell (if adbd is root)
+run_root_cmd() {
     if [ "$HAS_ADB_ROOT" = "1" ]; then
-        adb shell "$@" 2>/dev/null || true
-    # Try 2: su -c
+        timeout "$TIMEOUT_SEC" adb shell "$@" 2>/dev/null || true
     elif [ "$HAS_SU" = "1" ]; then
-        adb shell "su -c '$*'" 2>/dev/null || true
-    # Try 3: plain shell (best effort)
+        timeout "$TIMEOUT_SEC" adb shell "su 0 sh -c '$*'" 2>/dev/null || true
     else
-        adb shell "$@" 2>/dev/null || true
+        timeout "$TIMEOUT_SEC" adb shell "$@" 2>/dev/null || true
     fi
 }
 
 # ── Check Device ─────────────────────────────────────────────
 if ! adb devices 2>/dev/null | grep -q 'device$'; then
     echo "[ERROR] No device connected via ADB."
-    echo "  1. Connect phone via USB"
-    echo "  2. Ensure USB debugging is ON"
-    echo "  3. Accept RSA prompt if shown"
     exit 1
 fi
 
 echo "================================================="
-echo "  veux Kernel Diagnostic Capture"
+echo "  veux Kernel Diagnostic Capture v2.0"
 echo "  Mode   : $ACTION"
 echo "  Output : $OUT"
 echo "================================================="
 
 # ── Root Detection ───────────────────────────────────────────
-echo "[*] Checking root capabilities..."
+echo "[*] Detecting root capabilities..."
 HAS_ADB_ROOT=0
 HAS_SU=0
 
-# Try adb root first (enabled by androidboot.debuggable=1)
 if adb root 2>&1 | grep -q 'restarting adbd as root\|already running as root'; then
     sleep 1
     HAS_ADB_ROOT=1
-    echo "  [+] adb root: AVAILABLE (adbd running as root)"
+    echo "  [+] adb root: ACTIVE"
+elif adb shell "which su" 2>/dev/null | grep -q 'su'; then
+    HAS_SU=1
+    echo "  [+] su binary: ACTIVE"
 else
-    echo "  [-] adb root: NOT available"
+    echo "  [!] Running in NON-ROOT mode"
 fi
 
-# Check su availability
-if [ "$HAS_ADB_ROOT" = "0" ]; then
-    if adb shell "which su" 2>/dev/null | grep -q 'su'; then
-        HAS_SU=1
-        echo "  [+] su binary: FOUND"
-    else
-        echo "  [-] su binary: NOT found"
-    fi
-fi
-
-if [ "$HAS_ADB_ROOT" = "0" ] && [ "$HAS_SU" = "0" ]; then
-    echo "  [!] Running in NON-ROOT mode (some kernel logs may be restricted)"
-fi
-
-# ── SETUP MODE ───────────────────────────────────────────────
-if [ "$ACTION" = "setup" ]; then
+# ═════════════════════════════════════════════════════════════
+# MODE 1: LIVE MONITOR (Streams to host disk in real-time)
+# ═════════════════════════════════════════════════════════════
+if [ "$ACTION" = "monitor" ]; then
+    mkdir -p "$OUT"
     echo ""
-    echo "[+] Preparing device for crash capture..."
-    run_root "logpersist.start"
-    run_root "echo 1 > /proc/sys/kernel/printk_devkmsg"
+    echo "[+] Starting LIVE streaming logs to host PC ($OUT/)..."
+    echo "    - $OUT/live-logcat.log"
+    echo "    - $OUT/live-dmesg.log"
+    echo ""
+
+    # Start live streams in background
+    adb logcat -v time -b all > "$OUT/live-logcat.log" 2>&1 &
+    LOGCAT_PID=$!
+
+    if [ "$HAS_ADB_ROOT" = "1" ]; then
+        adb shell "dmesg -w" > "$OUT/live-dmesg.log" 2>&1 &
+        DMESG_PID=$!
+    elif [ "$HAS_SU" = "1" ]; then
+        adb shell "su 0 sh -c 'dmesg -w'" > "$OUT/live-dmesg.log" 2>&1 &
+        DMESG_PID=$!
+    else
+        DMESG_PID=""
+    fi
+
+    echo "=========================================================="
+    echo "  >>> READY! NOW UNLOCK YOUR PHONE TO TRIGGER CRASH <<<"
+    echo "  Press Ctrl+C when phone soft-reboots or you are done."
+    echo "=========================================================="
+
+    cleanup() {
+        echo ""
+        echo "[*] Stopping live monitors..."
+        kill $LOGCAT_PID 2>/dev/null || true
+        [ -n "$DMESG_PID" ] && kill $DMESG_PID 2>/dev/null || true
+        
+        echo "[*] Analyzing captured live stream for root cause..."
+        grep -iE 'fatal|panic|oops|backtrace|abort|sigsegv|sigabrt|died' "$OUT/live-logcat.log" > "$OUT/crash-summary-logcat.txt" 2>/dev/null || true
+        [ -f "$OUT/live-dmesg.log" ] && grep -iE 'panic|oops|bug:|fatal|call trace|cut here' "$OUT/live-dmesg.log" > "$OUT/crash-summary-dmesg.txt" 2>/dev/null || true
+        
+        echo "=== Quick Crash Triage ==="
+        if [ -s "$OUT/crash-summary-dmesg.txt" ]; then
+            echo "🔴 KERNEL PANIC FOUND IN LIVE DMESG:"
+            head -15 "$OUT/crash-summary-dmesg.txt"
+        elif [ -s "$OUT/crash-summary-logcat.txt" ]; then
+            echo "🟡 USERSPACE CRASH FOUND IN LIVE LOGCAT:"
+            head -15 "$OUT/crash-summary-logcat.txt"
+        else
+            echo "ℹ️ No obvious panic strings in top filter — check raw files in $OUT/"
+        fi
+        exit 0
+    }
+    trap cleanup INT TERM
+
+    # Keep watching connection
+    while true; do
+        if ! adb devices 2>/dev/null | grep -q 'device$'; then
+            echo "[!] Device disconnected / rebooted!"
+            sleep 2
+            cleanup
+        fi
+        sleep 1
+    done
+fi
+
+# ═════════════════════════════════════════════════════════════
+# MODE 2: SETUP BASELINE
+# ═════════════════════════════════════════════════════════════
+if [ "$ACTION" = "setup" ]; then
+    mkdir -p "$OUT/baseline"
+    echo "[+] Capturing system baseline before flashing..."
+    run_root_cmd "logpersist.start"
+    run_root_cmd "echo 1 > /proc/sys/kernel/printk_devkmsg"
     adb shell "logcat -G 16M" 2>/dev/null || true
     
-    mkdir -p "$OUT/baseline"
-    run_root "uname -a" > "$OUT/baseline/kernel.txt"
-    run_root "cat /proc/cmdline" > "$OUT/baseline/cmdline.txt"
-    run_root "getenforce" > "$OUT/baseline/selinux.txt"
-    run_root "dmesg" > "$OUT/baseline/dmesg.txt"
+    run_root_cmd "uname -a" > "$OUT/baseline/kernel.txt"
+    run_root_cmd "cat /proc/cmdline" > "$OUT/baseline/cmdline.txt"
+    run_root_cmd "getenforce" > "$OUT/baseline/selinux.txt"
+    run_root_cmd "dmesg" > "$OUT/baseline/dmesg.txt"
     adb logcat -d -b all > "$OUT/baseline/logcat.txt" 2>/dev/null || true
     
-    echo ""
-    echo "=== Baseline Saved ==="
-    echo "  Kernel : $(cat "$OUT/baseline/kernel.txt" 2>/dev/null || echo 'unknown')"
-    echo "  SELinux: $(cat "$OUT/baseline/selinux.txt" 2>/dev/null || echo 'unknown')"
-    echo ""
-    echo "Next: Flash test kernel → trigger crash → run ./ksun-log-capture.sh pull"
+    echo "=== Baseline Saved to $OUT/baseline/ ==="
     exit 0
 fi
 
-# ── PULL MODE (Full Diagnostic) ──────────────────────────────
+# ═════════════════════════════════════════════════════════════
+# MODE 3: FULL POST-MORTEM DUMP (PULL)
+# ═════════════════════════════════════════════════════════════
 mkdir -p "$OUT"
 
 echo ""
-echo "[1/12] Device Identification..."
-run_adb "getprop ro.product.model" > "$OUT/model.txt"
-run_adb "getprop ro.build.display.id" > "$OUT/build-id.txt"
-run_adb "getprop ro.build.version.release" > "$OUT/android-version.txt"
-run_adb "getprop ro.product.board" > "$OUT/board.txt"
-run_adb "getprop ro.hardware" > "$OUT/hardware.txt"
-run_adb "getprop ro.boot.slot_suffix" > "$OUT/slot.txt"
+echo "[1/14] Device & Slot..."
+run_adb_cmd "getprop ro.product.model" > "$OUT/model.txt"
+run_adb_cmd "getprop ro.build.display.id" > "$OUT/build-id.txt"
+run_adb_cmd "getprop ro.build.version.release" > "$OUT/android-version.txt"
+run_adb_cmd "getprop ro.boot.slot_suffix" > "$OUT/slot.txt"
 
-echo "[2/12] Kernel & Boot Info..."
-run_root "uname -a" > "$OUT/kernel-version.txt"
-run_root "cat /proc/version" > "$OUT/proc-version.txt"
-run_root "cat /proc/cmdline" > "$OUT/cmdline.txt"
-run_root "cat /proc/uptime" > "$OUT/uptime.txt"
+echo "[2/14] Kernel & Cmdline..."
+run_root_cmd "uname -a" > "$OUT/kernel-version.txt"
+run_root_cmd "cat /proc/version" > "$OUT/proc-version.txt"
+run_root_cmd "cat /proc/cmdline" > "$OUT/cmdline.txt"
+run_root_cmd "cat /proc/uptime" > "$OUT/uptime.txt"
 
-echo "[3/12] Dmesg (Kernel Log)..."
-run_root "dmesg" > "$OUT/dmesg.txt"
+echo "[3/14] Kernel Dmesg & Subsystem Filters..."
+run_root_cmd "dmesg" > "$OUT/dmesg.txt"
 if [ -s "$OUT/dmesg.txt" ]; then
     grep -iE 'panic|oops|bug:|fatal|call trace|cut here|kernel NULL' "$OUT/dmesg.txt" > "$OUT/dmesg-panics.txt" 2>/dev/null || true
     grep -iE 'sde|dsi|drm|display|panel|mdss|composer|hwc' "$OUT/dmesg.txt" > "$OUT/dmesg-display.txt" 2>/dev/null || true
     grep -iE 'fingerprint|silead|fpc|goodix|synna' "$OUT/dmesg.txt" > "$OUT/dmesg-fingerprint.txt" 2>/dev/null || true
     grep -iE 'avc:.*denied' "$OUT/dmesg.txt" > "$OUT/dmesg-avc-denials.txt" 2>/dev/null || true
-    echo "  [+] dmesg: $(wc -l < "$OUT/dmesg.txt") lines captured"
-else
-    echo "  [-] dmesg: empty (needs root)"
 fi
 
-echo "[4/12] Crash Logs & Pstore (Previous Boot)..."
-run_root "cat /sys/fs/pstore/console-ramdump-0" > "$OUT/pstore-console.txt"
-run_root "cat /sys/fs/pstore/dmesg-ramoops-0" > "$OUT/pstore-dmesg.txt"
-run_root "cat /proc/last_kmsg" > "$OUT/last_kmsg.txt"
-run_root "ls -la /sys/fs/pstore/" > "$OUT/pstore-files.txt"
+echo "[4/14] Crash RAM Dumps (pstore & last_kmsg)..."
+run_root_cmd "cat /sys/fs/pstore/console-ramdump-0" > "$OUT/pstore-console.txt"
+run_root_cmd "cat /sys/fs/pstore/dmesg-ramoops-0" > "$OUT/pstore-dmesg.txt"
+run_root_cmd "cat /proc/last_kmsg" > "$OUT/last_kmsg.txt"
+run_root_cmd "ls -la /sys/fs/pstore/" > "$OUT/pstore-files.txt"
 
-echo "[5/12] Logcat (System Logs)..."
+echo "[5/14] System Dropbox Crash Logs (SystemServer Forensics)..."
+run_adb_cmd "dumpsys dropbox --print system_server_crash" > "$OUT/dropbox-system-server-crash.txt"
+run_adb_cmd "dumpsys dropbox --print system_server_wtf" > "$OUT/dropbox-system-server-wtf.txt"
+run_adb_cmd "dumpsys dropbox --print system_app_crash" > "$OUT/dropbox-system-app-crash.txt"
+run_adb_cmd "dumpsys dropbox --print data_app_crash" > "$OUT/dropbox-data-app-crash.txt"
+run_adb_cmd "dumpsys dropbox --print SYSTEM_TOMBSTONE" > "$OUT/dropbox-tombstone.txt"
+
+echo "[6/14] Logcat (Crash & System Buffers)..."
 adb logcat -d -b crash > "$OUT/logcat-crash.txt" 2>/dev/null || true
-adb logcat -d -b main,system,events -v time > "$OUT/logcat-main.txt" 2>/dev/null || true
-if [ -s "$OUT/logcat-crash.txt" ]; then
-    echo "  [+] Crash logcat: $(wc -l < "$OUT/logcat-crash.txt") lines"
-fi
+adb logcat -d -b main,system -v time > "$OUT/logcat-main.txt" 2>/dev/null || true
 
-echo "[6/12] Tombstones & ANR (Native Process Crashes)..."
-run_root "ls -la /data/tombstones/" > "$OUT/tombstones-list.txt"
-for i in 00 01 02 03 04; do
-    run_root "cat /data/tombstones/tombstone_$i" > "$OUT/tombstone_$i.txt"
+echo "[7/14] Native Tombstones..."
+run_root_cmd "ls -la /data/tombstones/" > "$OUT/tombstones-list.txt"
+for i in 00 01 02 03 04 05; do
+    run_root_cmd "cat /data/tombstones/tombstone_$i" > "$OUT/tombstone_$i.txt"
     [ ! -s "$OUT/tombstone_$i.txt" ] && rm -f "$OUT/tombstone_$i.txt"
 done
-run_root "ls -la /data/anr/" > "$OUT/anr-list.txt"
 
-echo "[7/12] SELinux Status & Violations..."
-run_root "getenforce" > "$OUT/selinux-mode.txt"
-run_root "cat /proc/filesystems" > "$OUT/filesystems.txt"
+echo "[8/14] Binder IPC & Deadlock Diagnostics..."
+run_root_cmd "cat /sys/kernel/debug/binder/failed_transaction_log" > "$OUT/binder-failed-transactions.txt"
+run_root_cmd "cat /sys/kernel/debug/binder/transaction_log" > "$OUT/binder-transactions.txt"
+run_root_cmd "cat /sys/kernel/debug/binder/state" > "$OUT/binder-state.txt"
+
+echo "[9/14] SELinux Mode & Policy Violations..."
+run_root_cmd "getenforce" > "$OUT/selinux-mode.txt"
 if [ -s "$OUT/logcat-main.txt" ]; then
     grep -i 'avc.*denied' "$OUT/logcat-main.txt" > "$OUT/logcat-avc-denials.txt" 2>/dev/null || true
 fi
 
-echo "[8/12] Display & Graphics Stack..."
-run_adb "dumpsys display" > "$OUT/dumpsys-display.txt"
-run_adb "dumpsys SurfaceFlinger" > "$OUT/dumpsys-surfaceflinger.txt"
-run_adb "dumpsys SurfaceFlinger --latency" > "$OUT/surfaceflinger-latency.txt"
+echo "[10/14] Display, HWC & SurfaceFlinger..."
+run_adb_cmd "dumpsys display" > "$OUT/dumpsys-display.txt"
+run_adb_cmd "dumpsys SurfaceFlinger" > "$OUT/dumpsys-surfaceflinger.txt"
+run_adb_cmd "dumpsys SurfaceFlinger --latency" > "$OUT/surfaceflinger-latency.txt"
 
-echo "[9/12] Input & Biometrics..."
-run_adb "dumpsys input" > "$OUT/dumpsys-input.txt"
-run_adb "dumpsys fingerprint" > "$OUT/dumpsys-fingerprint.txt"
-run_adb "dumpsys biometric" > "$OUT/dumpsys-biometric.txt"
+echo "[11/14] Input, Biometrics & Keyguard..."
+run_adb_cmd "dumpsys input" > "$OUT/dumpsys-input.txt"
+run_adb_cmd "dumpsys fingerprint" > "$OUT/dumpsys-fingerprint.txt"
+run_adb_cmd "dumpsys biometric" > "$OUT/dumpsys-biometric.txt"
+run_adb_cmd "dumpsys window" > "$OUT/dumpsys-window.txt"
 
-echo "[10/12] Power & Keyguard..."
-run_adb "dumpsys power" > "$OUT/dumpsys-power.txt"
-run_adb "dumpsys window" > "$OUT/dumpsys-window.txt"
+echo "[12/14] CPU Frequencies, Clocks & Thermals..."
+run_root_cmd "cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq" > "$OUT/cpu-freqs.txt"
+run_root_cmd "cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor" > "$OUT/cpu-governors.txt"
+run_root_cmd "cat /sys/class/thermal/thermal_zone*/temp" > "$OUT/thermal-temps.txt"
 
-echo "[11/12] Partitions & Storage..."
-run_root "ls -la /dev/block/bootdevice/by-name/" > "$OUT/partitions.txt"
-run_root "df -h" > "$OUT/df.txt"
-run_root "cat /proc/mounts" > "$OUT/mounts.txt"
+echo "[13/14] Storage, Mounts & Partitions..."
+run_root_cmd "ls -la /dev/block/bootdevice/by-name/" > "$OUT/partitions.txt"
+run_root_cmd "cat /proc/mounts" > "$OUT/mounts.txt"
 
-echo "[12/12] Kernel Config & Modules..."
-run_root "cat /proc/config.gz | gunzip" > "$OUT/running-config.txt" 2>/dev/null || true
-run_root "lsmod" > "$OUT/lsmod.txt"
-run_root "cat /proc/modules" > "$OUT/proc-modules.txt"
+echo "[14/14] Running Kernel Config & Loaded Modules..."
+run_root_cmd "cat /proc/config.gz | gunzip" > "$OUT/running-config.txt" 2>/dev/null || true
+run_root_cmd "lsmod" > "$OUT/lsmod.txt"
 
-# ── Summary Report ───────────────────────────────────────────
+# ── Final Triage Summary ─────────────────────────────────────
 echo ""
 echo "================================================="
-echo "  Capture Complete — Summary"
+echo "  Capture Complete — Root Cause Triage"
 echo "================================================="
-echo "  Output Directory : $OUT/"
-echo "  Files Captured   :"
 
-for f in "$OUT"/*; do
-    if [ -f "$f" ] && [ -s "$f" ]; then
-        printf "    %-30s %s\n" "$(basename "$f")" "$(du -h "$f" | cut -f1)"
-    fi
-done
+FOUND_ISSUES=0
 
-echo ""
-echo "  Key files to check first for soft-reboot on unlock:"
-[ -s "$OUT/dmesg-panics.txt" ]       && echo "    🔴 $OUT/dmesg-panics.txt (KERNEL PANIC FOUND!)"
-[ -s "$OUT/logcat-crash.txt" ]       && echo "    🟡 $OUT/logcat-crash.txt (Process crash)"
-[ -s "$OUT/pstore-console.txt" ]     && echo "    🟡 $OUT/pstore-console.txt (Previous crash log)"
-[ -s "$OUT/dmesg-avc-denials.txt" ]  && echo "    🟡 $OUT/dmesg-avc-denials.txt (SELinux denials)"
-[ -s "$OUT/dmesg-fingerprint.txt" ]  && echo "    🔵 $OUT/dmesg-fingerprint.txt (Fingerprint HAL logs)"
-[ -s "$OUT/dmesg-display.txt" ]      && echo "    🔵 $OUT/dmesg-display.txt (Display driver logs)"
+if [ -s "$OUT/dmesg-panics.txt" ]; then
+    echo "🔴 [CRITICAL] Kernel panic found in dmesg:"
+    head -5 "$OUT/dmesg-panics.txt"
+    FOUND_ISSUES=1
+fi
+
+if [ -s "$OUT/dropbox-system-server-crash.txt" ]; then
+    echo "🔴 [CRITICAL] system_server crash recorded in Dropbox:"
+    grep -E 'Process:|Flags:|Subject:|FATAL EXCEPTION' "$OUT/dropbox-system-server-crash.txt" | head -5
+    FOUND_ISSUES=1
+fi
+
+if [ -s "$OUT/pstore-console.txt" ]; then
+    echo "🟡 [WARNING] Prior crash console dump exists in pstore"
+    FOUND_ISSUES=1
+fi
+
+if [ -s "$OUT/logcat-crash.txt" ]; then
+    echo "🟡 [WARNING] Process crash detected in logcat:"
+    head -5 "$OUT/logcat-crash.txt"
+    FOUND_ISSUES=1
+fi
+
+if [ "$FOUND_ISSUES" = "0" ]; then
+    echo "✅ No obvious crash signatures found in standard buffers."
+    echo "   Inspect raw logs in: $OUT/"
+fi
 echo "================================================="
