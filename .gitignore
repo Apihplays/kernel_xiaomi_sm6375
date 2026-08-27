@@ -153,3 +153,14 @@ arch/arm/boot/dts/vendor
 #Ignoring Android.bp link file
 #
 Android.bp
+
+# andpull/ksun build artifacts
+*.zip
+*.img
+*.log
+diag-*/
+build.log
+setup_ksun.sh
+veux-diag.sh
+nebula-*.zip
+positron-*.zip
