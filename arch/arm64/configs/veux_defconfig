@@ -751,6 +751,7 @@ CONFIG_UBSAN_TRAP=y
 # CONFIG_UBSAN_BOOL is not set
 # CONFIG_UBSAN_ENUM is not set
 
-# KernelSU
+# KernelSU (requires KPROBES dependency)
+CONFIG_KPROBES=y
 CONFIG_KSU=y
 CONFIG_KSU_MANUAL_HOOK=y
