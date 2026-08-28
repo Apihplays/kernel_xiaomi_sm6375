@@ -371,6 +371,52 @@ collect_selinux_logs() {
     adb logcat -b all -d 2>/dev/null | grep -iE "avc|selinux|denied" > "$OUTPUT_DIR/selinux/avc_logcat.txt" || true
 }
 
+# ── KernelSU / root-manager forensics (targets soft-reboot cause list) ────────
+# Covers: spoofed-manager RCU (-24), stale metamodule flag, BPF map limit,
+#         audio.service SIGSEGV tombstone, KSU supercall return code.
+collect_ksu_forensics() {
+    title "KernelSU / Root-Manager Forensics"
+
+    mkdir -p "$OUTPUT_DIR/ksu"
+
+    # 1. Installed KSU managers (spoofed vs official detection)
+    adb_cmd "pm list packages 2>/dev/null | grep -iE 'kernelsu|ksu'" \
+        > "$OUTPUT_DIR/ksu/manager_packages.txt" || true
+
+    # 2. KSU version from kernel
+    adb_cmd "cat /proc/version" > "$OUTPUT_DIR/ksu/kernel_version.txt" || true
+    adb_cmd "cat /data/adb/ksu/.version 2>/dev/null" > "$OUTPUT_DIR/ksu/ksu_version.txt" || true
+
+    # 3. Metamodule / module state flags (Cause #3: stale update flag)
+    adb_cmd "ls -la /data/adb/modules/ 2>/dev/null" > "$OUTPUT_DIR/ksu/modules_dir.txt" || true
+    adb_cmd "ls -la /data/adb/metamodule 2>/dev/null" > "$OUTPUT_DIR/ksu/metamodule_symlink.txt" || true
+    adb_cmd "for d in /data/adb/modules/*/; do echo \"== \$d ==\"; ls -la \"\$d\" 2>/dev/null | grep -iE 'update|install|remove|disable'; cat \"\$d/module.prop\" 2>/dev/null | grep -i metamodule; done" \
+        > "$OUTPUT_DIR/ksu/module_flags.txt" || true
+
+    # 4. KSU internal state
+    adb_cmd "ls -la /data/adb/ksu/ 2>/dev/null" > "$OUTPUT_DIR/ksu/ksu_state.txt" || true
+
+    # 5. BPF map limit (Cause #5: EMFILE -24 on bpf map swap)
+    adb_cmd "cat /proc/sys/fs/maxfiles 2>/dev/null" > "$OUTPUT_DIR/ksu/maxfiles.txt" || true
+    adb_cmd "cat /proc/sys/fs/nr_open 2>/dev/null" > "$OUTPUT_DIR/ksu/nr_open.txt" || true
+    adb_cmd "ls /sys/fs/bpf/ 2>/dev/null | wc -l" > "$OUTPUT_DIR/ksu/bpf_map_count.txt" || true
+    adb_cmd "cat /proc/buddyinfo 2>/dev/null | head -3" > "$OUTPUT_DIR/ksu/buddyinfo.txt" || true
+
+    # 6. RCU cmdline + stall check (Cause #4 / #10)
+    adb_cmd "cat /proc/cmdline 2>/dev/null | tr ' ' '\n' | grep -i rcu" > "$OUTPUT_DIR/ksu/rcu_cmdline.txt" || true
+    adb_cmd "dmesg 2>/dev/null | grep -iE 'rcu.*stall|rcu.*expedited' | tail -5" > "$OUTPUT_DIR/ksu/rcu_dmesg.txt" || true
+
+    # 7. audio.service tombstone (Cause #6: SIGSEGV cascade) — pull latest
+    adb_cmd "ls -t /data/tombstones/ 2>/dev/null | head -1" > "$OUTPUT_DIR/ksu/latest_tombstone.txt" || true
+    local ts=$(adb_cmd "ls -t /data/tombstones/ 2>/dev/null | head -1" 2>/dev/null | tr -d '\r')
+    if [ -n "$ts" ]; then
+        adb_cmd "cat /data/tombstones/$ts 2>/dev/null | head -60" > "$OUTPUT_DIR/ksu/tombstone_audio.txt" || true
+    fi
+
+    # 8. KSU supercall return trace (Cause #10) — grep kernel log for ksu errors
+    log_filtered_dmesg "ksu|kernelsu|supercall|synchronizeKernelRCU" "$OUTPUT_DIR/ksu/ksu_dmesg.txt"
+}
+
 collect_hal_logs() {
     title "HAL & Display Subsystem"
 
@@ -517,6 +563,7 @@ main() {
             collect_crash_forensics
             collect_binder_ipc
             collect_selinux_logs
+            collect_ksu_forensics
             collect_hal_logs
             ;;
         perf)
@@ -532,6 +579,12 @@ main() {
             collect_logcat
             collect_system_state
             ;;
+        ksu)
+            check_adb
+            gain_root
+            setup_directories
+            collect_ksu_forensics
+            ;;
         full|*)
             setup_directories
             collect_kernel_logs
@@ -541,6 +594,7 @@ main() {
             collect_qcom_logs
             collect_thermal_logs
             collect_selinux_logs
+            collect_ksu_forensics
             collect_hal_logs
             collect_system_state
             ;;
