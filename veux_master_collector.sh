@@ -413,8 +413,18 @@ collect_ksu_forensics() {
         adb_cmd "cat /data/tombstones/$ts 2>/dev/null | head -60" > "$OUTPUT_DIR/ksu/tombstone_audio.txt" || true
     fi
 
-    # 8. KSU supercall return trace (Cause #10) — grep kernel log for ksu errors
-    log_filtered_dmesg "ksu|kernelsu|supercall|synchronizeKernelRCU" "$OUTPUT_DIR/ksu/ksu_dmesg.txt"
+    # 8. KSU supercall return trace (Cause #10)
+    #    Capture live dmesg directly (works standalone in ksu mode, where
+    #    collect_kernel_logs may not have run and $OUTPUT_DIR/kernel/dmesg.txt
+    #    does not exist yet).
+    adb_cmd "dmesg 2>/dev/null" > "$OUTPUT_DIR/ksu/ksu_dmesg_raw.txt" || true
+    grep -iE "ksu|kernelsu|supercall|synchronizeKernelRCU" "$OUTPUT_DIR/ksu/ksu_dmesg_raw.txt" \
+        > "$OUTPUT_DIR/ksu/ksu_dmesg.txt" 2>/dev/null || true
+    # Also fall back to host dmesg.txt if present (from full/crash modes)
+    if [ ! -s "$OUTPUT_DIR/ksu/ksu_dmesg.txt" ] && [ -s "$OUTPUT_DIR/kernel/dmesg.txt" ]; then
+        grep -iE "ksu|kernelsu|supercall|synchronizeKernelRCU" "$OUTPUT_DIR/kernel/dmesg.txt" \
+            > "$OUTPUT_DIR/ksu/ksu_dmesg.txt" 2>/dev/null || true
+    fi
 }
 
 collect_hal_logs() {
