@@ -64,16 +64,20 @@ See `ksun-full-clean.sh` (repo root). Use the OFFICIAL Manager, never a spoofed 
 
 ## Build Facts (verified)
 
-- **Full LTO = `-O3`**: `Makefile` sets `LD_FLAGS_LTO_CLANG := --lto-O3` with
-  `CONFIG_LTO_CLANG=y` + `CONFIG_THINLTO=n`. CFLAG level is `-O2`
-  (`CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y`); LTO promotes to `-O3` whole-program at link.
+- **Full/Thin LTO**: `CONFIG_LTO_CLANG=y` always. `CONFIG_THINLTO=y` (current) for lighter
+  RAM/CPU during link; `CONFIG_THINLTO=n` = Full Monolithic LTO at `--lto-O3` (Makefile:957,
+  heavier but max cross-module opt). CFLAG level is `-O2` (`CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y`);
+  LTO promotes to `-O3` whole-program at link time.
 - **PREEMPT**: `CONFIG_PREEMPT=y` (+ `PREEMPT_COUNT`, `PREEMPTION`, `PREEMPT_RCU`).
   Not `PREEMPT_RT`.
 - **SMP**: `CONFIG_SMP=y` (arm64 `def_bool y`, cannot disable). All 8 SM6375 cores online.
 - **HZ**: `CONFIG_HZ_100=y` (inherited from positron/nebula base; intentional, NOT bumped).
-- **KERNEL NAME**: `CONFIG_LOCALVERSION="-ksun"` in defconfig. IMPORTANT — the repo-root
-  `localversion` file OVERRIDES the defconfig suffix with a tilde prefix (e.g. `~positron`).
-  Keep `localversion` empty so the kernel reports `5.4.302-ksun`, not `5.4.302~positron`.
+- **KERNEL NAME**: Set via the repo-root `localversion` file (currently `-ksun`). IMPORTANT: this
+  QGKI/positron fork IGNORES `CONFIG_LOCALVERSION` in the defconfig — the `localversion` file
+  is the only mechanism that sets the suffix (that's why the base showed `~positron`).
+  A git commit hash is always appended by `scripts/setlocalversion` (the fork stripped the
+  `CONFIG_LOCALVERSION_AUTO` gate), giving e.g. `5.4.302-ksun/45b87311`. That hash is cosmetic
+  and identifies the build commit — leave it. Do NOT put `~positron` back in `localversion`.
 - **DEBUG_INFO disabled**: `CONFIG_DEBUG_INFO=n` because LLVM 22 (Clang/LLD 22.1.2) emits
   DWARF-5 relocations incompatible with `ld.lld` + ThinLTO/Full LTO
   (`unknown relocation (256)`). This is a toolchain bug, not our code.
