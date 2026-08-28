@@ -34,7 +34,18 @@ soft-reboot).
 ## Ruled OUT by 131940
 kernel panic · SELinux AVC on ksu · OOM/lowmemory · binder failed-transaction storm · LRU underflow
 
-## Collector targets
+## Defconfig Alignment Note (CORRECTION)
+The `arch/arm64/configs/vendor/nebula_veux_defconfig.txt` text file has NO `CONFIG_KSU`, but
+the real `nebula-veux-*.zip` Image DOES contain KernelSU (verified: `drivers/kernelsu/allowlist.c`,
+`kernelsu_work_queue` strings). So the defconfig TEXT is NOT representative of the shipped nebula
+build — nebula ships a LEANER KSU than ours. Do NOT assume "nebula has no KSU".
+
+Intentional diffs vs nebula (justified):
+- `LOCALVERSION="-ksun"`, `CONFIG_KSU*` hooks, `CONFIG_DEBUG_INFO=n`.
+- `androidboot.debuggable=1` was REMOVED from our `CONFIG_CMDLINE` (was the ONLY non-KSU cmdline
+  divergence vs nebula; suspected `system_server` EMFILE/-24 soft-reboot cause — see Cause #1).
+- `CONFIG_CMDLINE` now matches nebula exactly: `cgroup_disable=pressure`.
+
 `veux_master_collector.sh ksu` → `ksu/` dir with:
 `manager_packages.txt` (spoofed detect), `module_flags.txt` (#3), `maxfiles.txt`+`bpf_map_count.txt`
 (#5), `rcu_cmdline.txt` (#4), `tombstone_audio.txt` (#6), `ksu_dmesg.txt` (#10), `ksu_version.txt`.
