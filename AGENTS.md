@@ -87,12 +87,41 @@ See `ksun-full-clean.sh` (repo root). Use the OFFICIAL Manager, never a spoofed 
 
 ## Defconfig Alignment Methodology
 
-- Base = `arch/arm64/configs/vendor/nebula_veux_defconfig.txt` (nebula, known-good on veux).
-- Diff our `veux_defconfig` vs nebula and justify every diff. Allowed intentional diffs:
-  `LOCALVERSION="-ksun"`, `CONFIG_KSU*` hooks, `CONFIG_CMDLINE` adds `androidboot.debuggable=1`,
-  `CONFIG_DEBUG_INFO=n`.
-- Do NOT copy nebula's defconfig verbatim — it drops `CONFIG_KSU` (nebula has no KSU) and
-  would silently lose root after `make olddefconfig` unless we re-add it.
+- Base = `arch/arm64/configs/vendor/nebula_veux_defconfig.txt` (nebula defconfig text).
+- IMPORTANT: the nebula *defconfig text file* has no `CONFIG_KSU`, BUT the actual
+  `nebula-veux-*.zip` Image DOES contain KernelSU (verified: `drivers/kernelsu/allowlist.c`
+  strings, `kernelsu_work_queue`, etc.). So the defconfig text is NOT representative of the
+  shipped nebula build — nebula ships a leaner KSU than ours. Do NOT assume "nebula has no KSU".
+- Diff our `veux_defconfig` vs nebula and justify every diff. Intentional diffs:
+  `LOCALVERSION="-ksun"`, `CONFIG_KSU*` hooks, `CONFIG_DEBUG_INFO=n`.
+- `androidboot.debuggable=1` was REMOVED from our `CONFIG_CMDLINE` (it was the only non-KSU
+  cmdline divergence vs nebula and a suspected `system_server` EMFILE/-24 soft-reboot cause).
+- Do NOT copy nebula's defconfig verbatim — it drops `CONFIG_KSU` and would silently lose root
+  after `make olddefconfig` unless we re-add it.
+
+## system_server Crash / Soft-Reboot — Cause Checklist
+
+Symptom: `system_server` FATAL → `audio.service` SIGSEGV → framework restart (looks like
+soft-reboot). Latest evidence (`veux_logs_20260828_131940`): crash at `logcat_all.txt:3626`
+`synchronizeKernelRCU failed: -24` from `BpfNetMaps.swapActiveStatsMap()`; kernel dmesg shows
+NO panic/RCU stall/watchdog/OOM. `-24` = EMFILE (fd exhaustion). Conclusion: **userspace fd
+exhaustion, kernel stable. Nebula (also has KSU) is stable → differentiator is our cmdline/fd
+scope, not KSU presence.**
+
+Checklist (ranked; tick with `./veux_master_collector.sh ksu` or `crash` after reflash):
+
+- [x] **#1 `androidboot.debuggable=1`** — REMOVED from cmdline (matched nebula). Was the only
+      non-KSU cmdline diff; debuggable inflates `system_server` fd surface → EMFILE on A17
+      `swapActiveStatsMap`. (PRIMARY suspect, now fixed — validate by flashing.)
+- [ ] **#2 Full KSU-Next fd-apparatus** (`ksu_fdwrapper`/`ksu_install_fd`/`ksu_obs` pkg_observer)
+      — ours has these, nebula's KSU is leaner. If #1 fix insufficient, disable `ksu_obs`/fd layer.
+- [ ] **#3 Stale metamodule** `hybrid_mount/update` flag + `/data/adb/metamodule` symlink.
+- [ ] **#4 `rcupdate.rcu_expedited=1`** (nebula-aligned; test-flip only if #1 persists).
+- [ ] **#5 BPF map limit** (real kernel tuning candidate). Check `ksu/maxfiles.txt`, `bpf_map_count.txt`.
+- [ ] **#6 `audio.service` SIGSEGV** cascade — `ksu/tombstone_audio.txt`.
+- [ ] **#7 memcg LRU underflow** — clamped in `mm/memcontrol.c`; verify absent in new log.
+- [ ] **#8 Vendor HAL timeout** / **#9 `debuggable` tracing stress** / **#10 KSU supercall kernel bug**.
+- Ruled OUT by 131940: kernel panic, SELinux AVC on ksu, OOM, binder storm, LRU underflow.
 
 ## Git / Workflow
 
