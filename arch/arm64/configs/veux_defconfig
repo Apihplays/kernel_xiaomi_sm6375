@@ -759,3 +759,6 @@ CONFIG_UBSAN_TRAP=y
 # KernelSU — manual hook mode (no kprobe, no modules)
 CONFIG_KSU=y
 CONFIG_KSU_MANUAL_HOOK=y
+# Lean KSU: drop fd-injection apparatus (file_wrapper/pkg_observer/throne_tracker)
+# to match stable nebula-veux scope and avoid system_server EMFILE/-24 on A17.
+CONFIG_KSU_LEAN=y
