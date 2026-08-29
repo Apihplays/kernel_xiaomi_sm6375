@@ -1,6 +1,0 @@
-id=gpu_fix_veux
-name=GPU Fix for veux
-version=1.0
-versionCode=1
-author=Buffy
-description=Forces GPU to max frequency to work around TrustZone clock lock
