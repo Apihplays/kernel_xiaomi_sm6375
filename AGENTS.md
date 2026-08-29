@@ -53,6 +53,9 @@ Manual hook call sites patched into kernel source (do NOT remove these):
 `ksu_handle_execveat` (exec.c), `ksu_handle_faccessat` (open.c, **Required badge**),
 `ksu_handle_stat` + `ksu_handle_newfstat_ret`/`ksu_handle_fstat64_ret` (stat.c),
 `ksu_handle_sys_reboot` (reboot.c). input/setuid/sys_read are AUTO via LSM on <6.8.
+Our KernelSU-Next has NO `AUTO_*` Kconfig symbols (ReSukiSU-specific); those three hooks are
+implemented directly (setuid/sys_read by patch, input by kprobe) — all active. Full hook
+inventory + static-export rules saved locally as a reference.
 It also enforces static-symbol exports in `security/selinux/selinuxfs.c`
 (`write_op`, `sel_handle_status_ops`) when `CONFIG_KALLSYMS_ALL` is off — but those are
 fork-specific build enforcement; our KernelSU-Next v3.1.0-legacy builds fine WITHOUT them
