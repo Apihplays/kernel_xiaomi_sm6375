@@ -49,11 +49,17 @@ Manual hook call sites patched into kernel source (do NOT remove these):
 - `fs/stat.c`      — `ksu_handle_stat`
 - `kernel/reboot.c`— `ksu_handle_sys_reboot`
 
-(Note: resukisu/ReSukiSU also requires manual hooks — 5 sites across 4 files
-exec/open/stat/reboot + optional read_write — and its `manual_hook_check.mk` FAILS the
-build if any hook is missing. We studied it and RULED IT OUT as a KSU swap: resukisu has
-NO `CONFIG_KSU_LEAN` and REQUIRES `ksu_handle_faccessat` (fd-based su) — that is the exact
-fd-apparatus we stripped. Switching would re-add the soft-reboot cause.)
+(Note: resukisu/ReSukiSU also requires manual hooks — its `manual-integrate` guide mandates
+`ksu_handle_execveat` (exec.c), `ksu_handle_faccessat` (open.c, **Required badge**),
+`ksu_handle_stat` + `ksu_handle_newfstat_ret`/`ksu_handle_fstat64_ret` (stat.c),
+`ksu_handle_sys_reboot` (reboot.c). input/setuid/sys_read are AUTO via LSM on <6.8.
+It also enforces static-symbol exports in `security/selinux/selinuxfs.c`
+(`write_op`, `sel_handle_status_ops`) when `CONFIG_KALLSYMS_ALL` is off — but those are
+fork-specific build enforcement; our KernelSU-Next v3.1.0-legacy builds fine WITHOUT them
+(verified) and without the `*_ret` hooks. We studied it and RULED IT OUT as a KSU swap:
+resukisu has NO `CONFIG_KSU_LEAN` and **requires `ksu_handle_faccessat` unconditionally**
+(fd-based su = the fd-apparatus we stripped via lean). Switching would re-add the EMFILE/-24
+soft-reboot cause. The full ReSukiSU manual-integrate guide is saved locally as a reference.)
 
 ### CONFIG_KSU_LEAN — the soft-reboot fix
 Our KSU-Next (v3.1.0-legacy) compiles a full fd-injection apparatus by default:
