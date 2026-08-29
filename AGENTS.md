@@ -144,7 +144,24 @@ Checklist (ranked; tick with `./veux_master_collector.sh ksu` or `crash` after r
 - [x] **#1 `androidboot.debuggable=1`** — REMOVED from cmdline (matched nebula).
 - [x] **#2 KSU fd-apparatus** — FIXED via `CONFIG_KSU_LEAN=y`. Verified all 4 fd symbols = 0
       in built Image (`ksun-veux-20260828-212139.zip`, `5.4.302-ksun/78cc3601`). This matches
-      nebula's lean KSU scope. PRIMARY kernel-side fix — validate by flashing.
+      nebula's lean KSU scope.
+
+## Validation (evidence chain)
+
+**Root cause PROVEN on-device:** User flashed **nebula** (which ships a lean KSU with NO
+fd-apparatus) and confirmed **NO soft-reboot**. This empirically isolates the KSU fd-apparatus
+as the differentiator — our full-KSU build crashed `system_server` with EMFILE/-24 on A17,
+nebula's lean KSU did not. The earlier "userspace Manager only" theory is superseded.
+
+**Open validation:** The latest lean-ksun build (`ksun-veux-20260828-212139.zip`,
+`5.4.302-ksun/78cc3601`) has NOT yet been flashed. The hypothesis to confirm: with
+`CONFIG_KSU_LEAN` stripping the same fd-apparatus nebula lacks, our ksun build should now
+behave like nebula (no soft-reboot). Flash it, daily-drive, and trigger the same workload
+that crashed before (unlock + heavy net use). If stable → root cause closed. If it still
+reboots → fall through to #3–#10 below (metamodule / RCU / BPF / audio SIGSEGV / etc.),
+collect via `./veux_master_collector.sh ksu` (Termux `su`, since `debuggable=1` is gone so
+`adb root` won't work).
+
 - [ ] **#3 Stale metamodule** `hybrid_mount/update` flag + `/data/adb/metamodule` symlink.
 - [ ] **#4 `rcupdate.rcu_expedited=1`** (nebula-aligned; test-flip only if #2 persists).
 - [ ] **#5 BPF map limit** (real kernel tuning candidate). Check `ksu/maxfiles.txt`, `bpf_map_count.txt`.
