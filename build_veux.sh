@@ -19,6 +19,7 @@
 #   KCFLAGS / KCPPFLAGS        default: "-O2 -fvisibility=hidden -mcpu=cortex-a76" / "-O2"
 #   CROSS_COMPILE              default: aarch64-linux-gnu-
 #   KSU_FIX=0                  do NOT auto-enable KALLSYMS_ALL in .config
+#   LTO_THIN=0                 keep FULL Clang LTO (default: enable ThinLTO)
 #   LOG_FILE                   build log (default: ./error.log in kernel root)
 #   OUT_DIR                    where the AK3 zip is copied (default: Windows out)
 #
@@ -34,6 +35,9 @@
 #   - Runs `make olddefconfig` after config setup so kbuild's syncconfig never
 #     prompts for y/n choices (hand-appended KALLSYMS entries otherwise trigger
 #     interactive "Restart config..." at build start).
+#   - LTO: veux_defconfig has CONFIG_LTO_CLANG=y but `# CONFIG_THINLTO is not set`
+#     (= full LTO). The script flips CONFIG_THINLTO=y in the generated .config
+#     (Makefile then uses -flto=thin); set LTO_THIN=0 to keep full LTO.
 #   - AK3 zip step is skipped unless ./AnyKernel3 exists (it was removed).
 # ============================================================================
 set -euo pipefail
@@ -144,6 +148,15 @@ EOF
     else
         echo "WARNING: CONFIG_KALLSYMS_ALL not set and KSU_FIX=0 — build will fail" >&2
     fi
+fi
+
+# --- ThinLTO (default: yes) -------------------------------------------------
+# veux_defconfig disables THINLTO -> full Clang LTO at link time. arm64
+# supports ThinLTO (ARCH_SUPPORTS_THINLTO=y) and Kconfig defaults it to y.
+if [ "${LTO_THIN:-1}" = "1" ] && grep -q "^CONFIG_LTO_CLANG=y" .config \
+   && grep -q "^# CONFIG_THINLTO is not set" .config; then
+    echo "!! CONFIG_THINLTO is not set (full LTO) — enabling Clang ThinLTO"
+    sed -i 's/^# CONFIG_THINLTO is not set$/CONFIG_THINLTO=y/' .config
 fi
 
 # --- reconcile .config (non-interactive) -------------------------------------

@@ -111,8 +111,13 @@ jobs:
             printf '\n# ReSukiSU requirement (CI)\nCONFIG_DEBUG_KERNEL=y\nCONFIG_KALLSYMS_ALL=y\n' >> .config
             echo "[+] Appended DEBUG_KERNEL + KALLSYMS_ALL to .config"
           fi
+          # veux_defconfig disables THINLTO (full LTO) — enable ThinLTO
+          if grep -q "^CONFIG_LTO_CLANG=y" .config && grep -q "^# CONFIG_THINLTO is not set" .config; then
+            sed -i 's/^# CONFIG_THINLTO is not set$/CONFIG_THINLTO=y/' .config
+            echo "[+] Enabled Clang ThinLTO (-flto=thin)"
+          fi
           make olddefconfig
-          grep -E "^CONFIG_(DEBUG_KERNEL|KALLSYMS_ALL|KSU)=" .config
+          grep -E "^CONFIG_(DEBUG_KERNEL|KALLSYMS_ALL|KSU|THINLTO)=" .config
 
       - name: Build kernel (Image Image.gz dtbs)
         run: |
