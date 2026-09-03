@@ -3,11 +3,13 @@
 #
 # Self-contained CI mirroring the proven local recipe (build_veux.sh):
 #   veux_defconfig -> KALLSYMS_ALL/DEBUG_KERNEL fix -> olddefconfig
-#   -> make Image Image.gz dtbs (LLVM clang, all cores)
+#   -> make Image Image.gz dtbs (LLVM 23 clang, all cores)
 #   -> verify ReSukiSU hook symbols -> upload artifacts
 #
-# Modeled on the POCO X5 5G (SM6375) device workflow of the nGKI_Kernel_Build
-# project (ReSukiSU, LLVM=1, AOSP clang mirror, AnyKernel3 family).
+# Toolchain: official LLVM 23.1.0 release — same one used locally
+# (LLVM-23.1.0-Linux-X64, ~12 GB extracted). ld.lld links against ICU 70,
+# which Ubuntu 24.04 does not ship, so the ICU 70 libs are staged into the
+# toolchain's own lib/ (RUNPATH=$ORIGIN/../lib) exactly like the local fix.
 #
 # Trigger:
 #   - workflow_dispatch  -> "Run workflow" from the Actions tab (pick branch)
@@ -32,8 +34,9 @@ env:
   CROSS_COMPILE: aarch64-linux-gnu-
   KCFLAGS: -O2 -fvisibility=hidden -mcpu=cortex-a76
   KCPPFLAGS: -O2
-  # AOSP clang used by the SM6375 POCO X5 5G CI pipeline
-  CLANG_URL: https://github.com/bachnxuan/aosp_clang_mirror/releases/download/clang-r563880c-13989888/clang-r563880c.tar.gz
+  # Official LLVM 23.1.0 release — same toolchain as local build_veux.sh
+  LLVM_URL: https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0/LLVM-23.1.0-Linux-X64.tar.xz
+  FREE_MORE_SPACE: "true"
 
 jobs:
   build-kernel:
@@ -58,20 +61,43 @@ jobs:
             python3 cpio zip xz-utils \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
+      - name: Free disk space (LLVM 23 is ~12 GB extracted)
+        if: env.FREE_MORE_SPACE == 'true'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Remove hosted toolcache
+        if: env.FREE_MORE_SPACE == 'true'
+        shell: bash
+        run: sudo rm -rf /opt/hostedtoolcache || true
+
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: veux-5.4
           max-size: 2G
 
-      - name: Fetch AOSP clang
+      - name: Fetch LLVM 23.1.0 toolchain
         run: |
-          curl -fL --retry 3 -o clang.tar.gz "$CLANG_URL"
-          mkdir -p clang-custom
-          tar -C clang-custom -zxf clang.tar.gz
-          ls clang-custom/bin/clang clang-custom/bin/ld.lld >/dev/null
-          echo "$GITHUB_WORKSPACE/clang-custom/bin" >> "$GITHUB_PATH"
+          curl -fL --retry 3 -o llvm.tar.xz "$LLVM_URL"
+          mkdir -p llvm23
+          tar -C llvm23 -xf llvm.tar.xz --strip-components=1
+          ls llvm23/bin/clang llvm23/bin/ld.lld llvm23/bin/llvm-ar >/dev/null
+          # ld.lld needs ICU 70, not shipped on Ubuntu 24.04 — stage the
+          # libs into the toolchain's own lib/ (RUNPATH=$ORIGIN/../lib)
+          curl -fL -o libicu70.deb http://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu70_70.1-2_amd64.deb
+          dpkg -x libicu70.deb icu70
+          cp -a icu70/usr/lib/x86_64-linux-gnu/libicu*.so.70* llvm23/lib/
+          echo "$GITHUB_WORKSPACE/llvm23/bin" >> "$GITHUB_PATH"
           clang --version | head -1
+          ld.lld --version
 
       - name: Generate .config (veux_defconfig)
         run: |
