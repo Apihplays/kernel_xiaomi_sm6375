@@ -1,3 +1,5 @@
+ccflags-y += -I$(src)
+
 obj-y += rmnet_core.o
 obj-y += rmnet_ctl.o
 rmnet_core-y := rmnet_config.o rmnet_handlers.o rmnet_descriptor.o \

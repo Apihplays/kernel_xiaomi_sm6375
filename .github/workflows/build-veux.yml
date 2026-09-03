@@ -1,0 +1,125 @@
+# ============================================================================
+# Build veux (Redmi Note 11 Pro 5G / SM6375 holi) — 5.4 kernel, PixelOS A17
+#
+# Self-contained CI mirroring the proven local recipe (build_veux.sh):
+#   veux_defconfig -> KALLSYMS_ALL/DEBUG_KERNEL fix -> olddefconfig
+#   -> make Image Image.gz dtbs (LLVM clang, all cores)
+#   -> verify ReSukiSU hook symbols -> upload artifacts
+#
+# Modeled on the POCO X5 5G (SM6375) device workflow of the nGKI_Kernel_Build
+# project (ReSukiSU, LLVM=1, AOSP clang mirror, AnyKernel3 family).
+#
+# Trigger:
+#   - workflow_dispatch  -> "Run workflow" from the Actions tab (pick branch)
+#   - push to veux-ci    -> auto build after every push to that branch
+#
+# Artifacts-first: uploads Image / Image.gz / dtbs + error.log. AnyKernel3
+# zip packaging is intentionally NOT wired in yet (needs a custom AK3 with
+# vendor_boot support for veux).
+# ============================================================================
+name: Build veux (SM6375 A17)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [veux-ci]
+
+env:
+  # Matches build_veux.sh
+  ARCH: arm64
+  LLVM: 1
+  LLVM_IAS: 1
+  CROSS_COMPILE: aarch64-linux-gnu-
+  KCFLAGS: -O2 -fvisibility=hidden -mcpu=cortex-a76
+  KCPPFLAGS: -O2
+  # AOSP clang used by the SM6375 POCO X5 5G CI pipeline
+  CLANG_URL: https://github.com/bachnxuan/aosp_clang_mirror/releases/download/clang-r563880c-13989888/clang-r563880c.tar.gz
+
+jobs:
+  build-kernel:
+    name: veux 5.4 (Image + Image.gz + dtbs)
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: Checkout (integrated veux tree, incl. KernelSU submodule + hooks)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive   # KernelSU (ReSukiSU) pinned via .gitmodules
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libncurses-dev \
+            python3 cpio zip xz-utils \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: veux-5.4
+          max-size: 2G
+
+      - name: Fetch AOSP clang
+        run: |
+          curl -fL --retry 3 -o clang.tar.gz "$CLANG_URL"
+          mkdir -p clang-custom
+          tar -C clang-custom -zxf clang.tar.gz
+          ls clang-custom/bin/clang clang-custom/bin/ld.lld >/dev/null
+          echo "$GITHUB_WORKSPACE/clang-custom/bin" >> "$GITHUB_PATH"
+          clang --version | head -1
+
+      - name: Generate .config (veux_defconfig)
+        run: |
+          make veux_defconfig
+
+      - name: ReSukiSU KALLSYMS_ALL fix + reconcile (non-interactive)
+        run: |
+          # static_export_check.mk hard-fails without CONFIG_KALLSYMS_ALL=y
+          if grep -q "^CONFIG_KSU=y" .config && ! grep -q "^CONFIG_KALLSYMS_ALL=y" .config; then
+            sed -i '/^# CONFIG_DEBUG_KERNEL is not set$/d; /^CONFIG_DEBUG_KERNEL=/d; /^CONFIG_KALLSYMS_ALL=/d' .config
+            printf '\n# ReSukiSU requirement (CI)\nCONFIG_DEBUG_KERNEL=y\nCONFIG_KALLSYMS_ALL=y\n' >> .config
+            echo "[+] Appended DEBUG_KERNEL + KALLSYMS_ALL to .config"
+          fi
+          make olddefconfig
+          grep -E "^CONFIG_(DEBUG_KERNEL|KALLSYMS_ALL|KSU)=" .config
+
+      - name: Build kernel (Image Image.gz dtbs)
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" CC="ccache clang" Image Image.gz dtbs 2>&1 | tee error.log
+
+      - name: Verify ReSukiSU hooks in Image
+        run: |
+          missing=0
+          for sym in ksu_handle_execveat ksu_handle_faccessat ksu_handle_stat \
+                     ksu_handle_newfstat_ret ksu_handle_fstat64_ret ksu_handle_sys_reboot; do
+            if grep -aq "$sym" arch/arm64/boot/Image; then
+              echo "  [OK] $sym"
+            else
+              echo "  [MISSING] $sym"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Upload kernel artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: veux-kernel-Image
+          path: |
+            arch/arm64/boot/Image
+            arch/arm64/boot/Image.gz
+            arch/arm64/boot/dts/**
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error.log
+          path: error.log

@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+ccflags-y += -I$(srctree) -I$(src)
+
 obj-$(CONFIG_RNDIS_IPA) += rndisipam.o
 rndisipam-objs := rndis_ipa.o
 
