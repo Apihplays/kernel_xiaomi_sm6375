@@ -13,29 +13,22 @@
 # now permanently set in arch/arm64/configs/veux_defconfig.
 #
 # Usage:
-#   ./build_veux.sh                     # normal build
+#   ./build_veux.sh                     # normal build (always starts clean)
 #   PROFILE_GEN=1 ./build_veux.sh       # instrumented build for PGO
 #   PROFILE_USE=... ./build_veux.sh     # rebuild using profile
+#
+# NOTE: every run wipes the tree with `make mrproper` (removes .config and
+# all build artifacts), then regenerates .config from veux_defconfig.
+# Expect a full rebuild on every invocation.
 # ============================================================================
 set -euo pipefail
 
-# --- 0. Optionally wipe previous build ------------------------------------
-# Use with care: mrproper also removes .config.
-#   CLEAN=kernelsuonly  -> remove only the built-in KernelSU driver tree
-#   CLEAN=true          -> full make mrproper (config + all build artifacts)
-CLEAN="${CLEAN:-}"
-if [ "$CLEAN" = "true" ]; then
-    echo "== Running make mrproper to start from a clean tree"
-    make mrproper
-elif [ "$CLEAN" = "kernelsuonly" ]; then
-    echo "== Cleaning KernelSU build artifacts only"
-    if [ -f drivers/kernelsu/Makefile ]; then
-        make -C drivers/kernelsu clean || true
-    fi
-    rm -f drivers/kernelsu/*.o drivers/kernelsu/*.cmd drivers/kernelsu/*.ko \
-          drivers/kernelsu/*.mod drivers/kernelsu/*.mod.c \
-          drivers/kernelsu/*.o.d drivers/kernelsu/.kernelsu.* 2>/dev/null || true
-fi
+# --- 0. Always wipe previous build ------------------------------------------
+# mrproper removes .config and all generated files/build artifacts so the
+# build always starts from a pristine tree; .config is regenerated below
+# from arch/arm64/configs/veux_defconfig.
+echo "== Running make mrproper to start from a clean tree"
+make mrproper
 
 # --- 1. Toolchain -----------------------------------------------------------
 export PATH="/home/hayyan/toolchains/clang-r596125/bin:$PATH"
@@ -97,6 +90,7 @@ if [ -n "$MLGO_MODEL" ] && [ -f "$MLGO_MODEL" ]; then
 fi
 
 # --- 9. Build configuration -------------------------------------------------
+# Fresh .config from veux_defconfig (tree was just mrproper'd in step 0)
 echo "== Generating veux_defconfig"
 make veux_defconfig
 

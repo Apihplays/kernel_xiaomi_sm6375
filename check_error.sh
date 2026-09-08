@@ -58,6 +58,7 @@ analyze_errors() {
         touch have_error
     else
         echo "Not found any errors."
+        rm -f have_error
     fi
     print_separator
 }
