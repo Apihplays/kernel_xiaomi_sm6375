@@ -753,3 +753,8 @@ CONFIG_UBSAN_TRAP=y
 # ReSukiSU requirement
 CONFIG_DEBUG_KERNEL=y
 CONFIG_KALLSYMS_ALL=y
+
+# ReSukiSU: manual hooks for 5.4 (GKI 1.0); tracepoint hook needs 5.10+
+CONFIG_KSU=y
+# CONFIG_KSU_TRACEPOINT_HOOK is not set
+CONFIG_KSU_MANUAL_HOOK=y
