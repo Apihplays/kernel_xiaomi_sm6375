@@ -35,6 +35,17 @@ set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")"
 
+# --- cleanup trap ------------------------------------------------------------
+ROOT="$(pwd)"
+VMLINUX=vmlinux
+cleanup() {
+    local rc=$?
+    [ -f "$VMLINUX.orig" ] && mv -f "$VMLINUX.orig" "$VMLINUX" 2>/dev/null
+    rm -rf /tmp/ak3_stage 2>/dev/null
+    exit "$rc"
+}
+trap cleanup EXIT
+
 # --- modes -------------------------------------------------------------------
 MODE_BUILD=1
 MODE_CHECK=0
@@ -73,7 +84,6 @@ export ARCH=arm64
 export CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 export LLVM=1
 export LLVM_IAS=1
-ROOT="$(pwd)"   # kernel root (script dir after cd above)
 JOBS="${JOBS:-$(nproc)}"
 KCFLAGS="${KCFLAGS:--O2 -fvisibility=hidden -mcpu=cortex-a76}"
 KCPPFLAGS="${KCPPFLAGS:--O2}"
@@ -81,19 +91,76 @@ LOG_FILE="${LOG_FILE:-$ROOT/error.log}"
 OUT_DIR="${OUT_DIR:-/mnt/c/Users/Administrator/Documents/out}"
 IMAGE=arch/arm64/boot/Image
 IMAGE_GZ=arch/arm64/boot/Image.gz
-VMLINUX=vmlinux
+
+# Truncate log on fresh builds (--resume keeps old log for reference)
+if [ "$MODE_RESUME" -eq 0 ]; then
+    : > "$LOG_FILE"
+fi
 
 echo "== ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE LLVM=1 LLVM_IAS=1"
 echo "== JOBS=$JOBS  KCFLAGS=\"$KCFLAGS\"  KCPPFLAGS=\"$KCPPFLAGS\""
 echo "== Log: $LOG_FILE"
 
 # --- Optional optimizations – auto‑enable if prerequisites are met ----------
-# PGO: turned ON by default for veux builds
-#   Phase 1 (profile generation):  PROFILE_GEN=1          (no PROFILE_USE)
-#   Phase 2 (profile use):         PROFILE_USE=<profile> (no PROFILE_GEN)
-#   Normal build (no PGO):         leave both unset/0
-PROFILE_GEN="${PROFILE_GEN:-1}"
+# PGO: two‑phase build (profile‑guided optimisation)
+#   Phase 1 (instrument):  PROFILE_GEN=1          → builds instrumented kernel
+#   Phase 2 (optimise):    PROFILE_USE=<profile>  → builds optimised kernel
+#   Full auto:             PGO_BUILD=1            → phases 1 then 2
+#   Normal build (no PGO): leave all unset/0
+PROFILE_GEN="${PROFILE_GEN:-0}"
 PROFILE_USE="${PROFILE_USE:-}"
+PGO_BUILD="${PGO_BUILD:-0}"
+PROFRAW_DIR="$ROOT/pgo_profiles"
+MERGED="$ROOT/merged.profdata"
+
+# Mutual exclusion guard
+if [ "$PROFILE_GEN" = "1" ] && [ -n "$PROFILE_USE" ]; then
+    echo "ERROR: PROFILE_GEN and PROFILE_USE are mutually exclusive" >&2
+    exit 1
+fi
+
+# Locate compiler-rt profile runtime library
+find_profile_runtime() {
+    local d lib
+    for d in \
+        "$TC_PATH/../lib/clang"/*/lib/linux \
+        "$TC_PATH/../lib/clang"/*/lib/aarch64-unknown-linux-musl/lib/linux \
+        "$TC_PATH/lib/clang"/*/lib/linux \
+        "$TC_PATH/lib/clang"/*/lib/aarch64-unknown-linux-musl/lib/linux \
+        /usr/lib/llvm-*/lib/clang/*/lib/linux; do
+        [ -d "$d" ] || continue
+        for lib in \
+            "$d"/libclang_rt.profile-aarch64.a \
+            "$d"/aarch64-unknown-linux-musl/lib/linux/libclang_rt.profile-aarch64.a \
+            "$d"/libclang_rt.profile.a; do
+            [ -f "$lib" ] && { echo "$lib"; return 0; }
+        done
+    done
+    return 1
+}
+
+# --- PGO_BUILD auto-detect phase -------------------------------------------
+if [ "$PGO_BUILD" = "1" ] && [ "$PROFILE_GEN" != "1" ] && [ -z "$PROFILE_USE" ]; then
+    if [ -f "$MERGED" ]; then
+        echo "== PGO_BUILD: found $MERGED → Phase 2 (optimised build)"
+        PROFILE_USE="$MERGED"
+    else
+        echo "== PGO_BUILD: no profile yet → Phase 1 (instrumentation build)"
+        PROFILE_GEN=1
+    fi
+fi
+
+PROFILE_RUNTIME_LIB=""
+if [ "$PROFILE_GEN" = "1" ]; then
+    PROFILE_RUNTIME_LIB="$(find_profile_runtime)" || true
+    if [ -n "$PROFILE_RUNTIME_LIB" ]; then
+        echo "== PGO runtime: $PROFILE_RUNTIME_LIB"
+    else
+        echo "ERROR: compiler-rt profile runtime not found — cannot build PGO instrumented kernel" >&2
+        echo "       Install libclang-rt-dev or check toolchain layout." >&2
+        exit 1
+    fi
+fi
 
 # MLGO: if MLGO_MODEL is not set, check for default ~/mlgo-model.mlgo
 if [ -z "${MLGO_MODEL:-}" ]; then
@@ -120,11 +187,11 @@ KSU_SYMBOLS=(ksu_handle_execveat ksu_handle_faccessat ksu_handle_stat \
              ksu_handle_newfstat_ret ksu_handle_fstat64_ret ksu_handle_sys_reboot)
 
 check_ksu_symbols() {
-    local img="${1:-$IMAGE}"
-    [ -f "$img" ] || { echo "FAIL: $img not found" >&2; return 1; }
+    local vmlinux="${1:-$VMLINUX}"
+    [ -f "$vmlinux" ] || { echo "FAIL: $vmlinux not found" >&2; return 1; }
     local missing=0 sym
     for sym in "${KSU_SYMBOLS[@]}"; do
-        if grep -aq "$sym" "$img"; then
+        if nm "$vmlinux" 2>/dev/null | grep -qw "$sym"; then
             echo "  [OK] $sym"
         else
             echo "  [MISSING] $sym" >&2
@@ -135,8 +202,8 @@ check_ksu_symbols() {
 }
 
 if [ "$MODE_CHECK" -eq 1 ]; then
-    echo "== Checking ReSukiSU hooks in $IMAGE"
-    check_ksu_symbols "$IMAGE"
+    echo "== Checking ReSukiSU hooks in $VMLINUX"
+    check_ksu_symbols "$VMLINUX"
     exit $?
 fi
 
@@ -196,13 +263,20 @@ if [ "$PROFILE_GEN" = "1" ]; then
     echo "== PGO: building instrumented kernel (profile generation)"
     KBUILD_CFLAGS="$KBUILD_CFLAGS -fprofile-generate"
     KBUILD_LDFLAGS="$KBUILD_LDFLAGS -fprofile-generate"
+    # Link compiler-rt profile runtime so __llvm_profile_instrument_* resolves
+    if [ -n "$PROFILE_RUNTIME_LIB" ]; then
+        PROFILE_RT_DIR="$(dirname "$PROFILE_RUNTIME_LIB")"
+        PROFILE_RT_BASE="$(basename "$PROFILE_RUNTIME_LIB")"
+        KBUILD_LDFLAGS="$KBUILD_LDFLAGS -L$PROFILE_RT_DIR -l:$PROFILE_RT_BASE"
+    fi
 elif [ -n "$PROFILE_USE" ]; then
     if [ -f "$PROFILE_USE" ]; then
         echo "== PGO: using profile: $PROFILE_USE"
         KBUILD_CFLAGS="$KBUILD_CFLAGS -fprofile-use=$PROFILE_USE"
         KBUILD_LDFLAGS="$KBUILD_LDFLAGS -fprofile-use=$PROFILE_USE"
     else
-        echo "WARNING: PROFILE_USE file not found: $PROFILE_USE" >&2
+        echo "ERROR: PROFILE_USE file not found: $PROFILE_USE" >&2
+        exit 1
     fi
 fi
 
@@ -212,8 +286,23 @@ if [ -n "${MLGO_MODEL:-}" ] && [ -f "$MLGO_MODEL" ]; then
     KBUILD_CFLAGS="$KBUILD_CFLAGS -fmlgo-inlining=$MLGO_MODEL"
 fi
 
-export KBUILD_CFLAGS
-export KBUILD_LDFLAGS
+# NOTE: Do NOT export KBUILD_CFLAGS/KBUILD_LDFLAGS — kernel Makefile's
+# `KBUILD_CFLAGS :=` (line 496) and `KBUILD_LDFLAGS :=` (line 508) override
+# env vars. Pass on make command line instead. KCFLAGS is appended via
+# `KBUILD_CFLAGS += $(KCFLAGS)` at Makefile:1046 so it works.
+#
+# ThinLTO fix: --export-dynamic prevents internalization of symbols like
+# jiffies_64 that are referenced by vmlinux.lds but may appear "unused" to
+# ThinLTO's per-module resolution. Without this, the kallsyms re-link fails
+# with "symbol not found: jiffies_64".
+#
+# IMPORTANT: --export-dynamic goes in LDFLAGS_vmlinux (vmlinux link only),
+# NOT in KBUILD_LDFLAGS — the VDSO build also uses KBUILD_LDFLAGS but
+# links with $(LD) directly (not through $(CC)), causing "unknown argument".
+VMLINUX_EXTRA_LDFLAGS=""
+if [ "${LTO_THIN:-1}" = "1" ]; then
+    VMLINUX_EXTRA_LDFLAGS="-Wl,--export-dynamic"
+fi
 
 # --- build -------------------------------------------------------------------
 TARGETS="Image Image.gz dtbs"
@@ -225,7 +314,8 @@ fi
 echo "== make -j$JOBS $TARGETS"
 if ! make -j"$JOBS" KCFLAGS="$KCFLAGS $KBUILD_CFLAGS" \
                     KCPPFLAGS="$KCPPFLAGS" \
-                    LDFLAGS="$KBUILD_LDFLAGS" \
+                    KBUILD_LDFLAGS="$KBUILD_LDFLAGS" \
+                    LDFLAGS_vmlinux="$VMLINUX_EXTRA_LDFLAGS" \
                     $TARGETS 2>&1 | tee -a "$LOG_FILE"; then
     echo "BUILD FAILED — see $LOG_FILE" >&2
     exit 1
@@ -233,6 +323,28 @@ fi
 
 echo "== Verifying ReSukiSU hooks in $IMAGE"
 check_ksu_symbols "$IMAGE" || echo "WARNING: some hooks missing (see above)" >&2
+
+# --- PGO profile collection instructions (after instrumented build) ----------
+if [ "$PROFILE_GEN" = "1" ]; then
+    mkdir -p "$PROFRAW_DIR"
+    # Collect any .profraw files from the build tree
+    find "$ROOT" -maxdepth 2 -name "*.profraw" -exec mv {} "$PROFRAW_DIR/" \; 2>/dev/null || true
+    echo ""
+    echo "== PGO Phase 1 (instrumentation) complete."
+    echo "   Instrumented Image is ready for boot."
+    echo ""
+    echo "   To finish PGO:"
+    echo "   1.  Flash Image.gz to device, boot, use normally for a while."
+    echo "   2.  Pull profiles off device:"
+    echo "         adb pull /data/local/tmp/ $PROFRAW_DIR/"
+    echo "   3.  Merge and rebuild:"
+    echo "         $TC_PATH/llvm-profdata merge -output=$MERGED $PROFRAW_DIR/*.profraw"
+    echo "         PROFILE_USE=$MERGED ./buildveuxv2.sh --resume"
+    echo ""
+    echo "   Or with PGO_BUILD=1 (auto-detects phase 2 on next run):"
+    echo "         PGO_BUILD=1 ./buildveuxv2.sh --resume"
+    echo ""
+fi
 
 echo "== Outputs:"
 ls -lh "$IMAGE" "$IMAGE_GZ" 2>/dev/null || true
@@ -252,33 +364,27 @@ if [ "$BOLT_ENABLE" = "1" ]; then
         echo "WARNING: $VMLINUX not found; skipping BOLT." >&2
     else
         echo "== BOLT: optimizing vmlinux"
-        # Backup original vmlinux
         cp -f "$VMLINUX" "$VMLINUX.orig"
-        # Run BOLT. Use cache-line aware optimizations.
         if llvm-bolt "$VMLINUX" -o "$VMLINUX.bolt" \
             -reorder-blocks=cache \
             -split-functions=3 \
             -icf=1 \
             -use-gnu-stack \
             -dyno-stats; then
-            # Replace vmlinux with the bolt-optimized one
             mv "$VMLINUX.bolt" "$VMLINUX"
-            echo "== BOLT: regenerating Image and Image.gz from optimized vmlinux"
-            # Regenerate Image (binary) using objcopy
-            if command -v aarch64-linux-gnu-objcopy &>/dev/null; then
-                aarch64-linux-gnu-objcopy -O binary "$VMLINUX" "$IMAGE"
-            else
-                echo "WARNING: aarch64-linux-gnu-objcopy not found; skipping Image regen after BOLT" >&2
+            echo "== BOLT: regenerating Image via kernel build system"
+            if ! make -j"$JOBS" Image Image.gz 2>&1 | tee -a "$LOG_FILE"; then
+                echo "ERROR: BOLT Image regeneration failed" >&2
+                mv -f "$VMLINUX.orig" "$VMLINUX"
+                exit 1
             fi
-            # Re-compress to Image.gz
-            gzip -f -9 -c "$IMAGE" > "$IMAGE_GZ"
-            # Copy updated images to root
             cp -f "$IMAGE" "$ROOT/Image"
             cp -f "$IMAGE_GZ" "$ROOT/Image.gz"
+            rm -f "$VMLINUX.orig"
             echo "== BOLT optimization completed."
         else
             echo "WARNING: BOLT optimization failed; original vmlinux restored." >&2
-            mv "$VMLINUX.orig" "$VMLINUX"
+            mv -f "$VMLINUX.orig" "$VMLINUX"
         fi
     fi
 fi
