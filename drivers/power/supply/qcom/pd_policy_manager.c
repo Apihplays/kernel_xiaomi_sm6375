@@ -535,9 +535,9 @@ static bool usbpd_get_pps_status(struct usbpd_pm *pdpm)
         if (apdo_cap.max_mv < pm_config.min_adapter_volt_required ||
             apdo_cap.ma < pm_config.min_adapter_curr_required)
             continue;
-            if (apdo_idx == -1) {
-                apdo_idx = cap_idx;
-                pr_err("select potential cap_idx[%d]\n", cap_idx);
+        if (apdo_idx == -1) {
+            apdo_idx = cap_idx;
+            pr_err("select potential cap_idx[%d]\n", cap_idx);
 				if(pdpm->apdo_max_volt == 10000 && pdpm->apdo_max_curr > apdo_cap.ma) {
 					pr_err("potential apdo_max_volt %d, apdo_max_volt %d\n", pdpm->apdo_max_volt, pdpm->apdo_max_curr);
 				} else {
@@ -555,7 +555,7 @@ static bool usbpd_get_pps_status(struct usbpd_pm *pdpm)
 					pr_err("set APDO_MAX_CURR fail(%d)\n", ret);
 					return ret;
 				}
-            }
+        }
     }
     if (apdo_idx != -1){
         ret = usbpd_pps_enable_charging(pdpm, true, 5000, 3000);
@@ -649,9 +649,8 @@ static int pca_pps_tcp_notifier_call(struct notifier_block *nb,
         }
     default:
         break;
-    }
-    if (__pdpm->usb_psy)
-    	power_supply_changed(__pdpm->usb_psy);
+    }	if (__pdpm->usb_psy)
+		power_supply_changed(__pdpm->usb_psy);
 
     return NOTIFY_OK;
 }

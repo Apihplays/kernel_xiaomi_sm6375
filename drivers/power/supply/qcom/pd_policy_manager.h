@@ -14,7 +14,7 @@
 #include <linux/version.h>
 #include <linux/workqueue.h>
 #include <linux/power_supply.h>
-#include <../../../usb/typec/tcpc/inc/tcpm.h>
+#include "../../../usb/typec/tcpc/inc/tcpm.h"
 
 #define IIO_SECOND_CHANNEL_OFFSET 15
 enum pm_state {
