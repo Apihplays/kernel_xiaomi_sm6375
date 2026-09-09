@@ -4,7 +4,7 @@
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=nebula kernel by frost
+kernel.string=positron kernel - ReSukiSU + SUSFS
 do.devicecheck=1
 do.cleanup=1
 device.name1=veux
