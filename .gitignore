@@ -156,3 +156,6 @@ Android.bp
 
 # Generated AnyKernel3 flashable zips (package_veux.sh)
 /veux-AnyKernel3-*.zip
+
+# nebula-veux template: Image is replaced by package_veux.sh at pack time
+/nebula-veux/Image
