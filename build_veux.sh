@@ -61,7 +61,11 @@ else
 fi
 
 # --- 6. Base compiler flags (always safe) -----------------------------------
-KCFLAGS="-O2 -fvisibility=hidden -mcpu=cortex-a76"
+# NOTE: do NOT add -fvisibility=hidden here: it gets applied to the arm64
+# vDSO too, hiding __kernel_gettimeofday/__kernel_clock_gettime from .dynsym.
+# Bionic then falls back to real syscalls and qcrilNrd's seccomp (which does
+# not allow gettimeofday) kills RIL with SIGSYS -> SIM/radio dead.
+KCFLAGS="-O2 -mcpu=cortex-a76"
 KCPPFLAGS="-O2"
 
 EXTRA_CFLAGS="-fno-builtin-wcslen -fno-strict-overflow -fno-merge-all-constants"
