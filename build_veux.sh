@@ -16,6 +16,7 @@
 #   ./build_veux.sh                     # normal build (always starts clean)
 #   LTO_MODE=full ./build_veux.sh       # full LTO instead of ThinLTO
 #   BOLT_ENABLE=0 ./build_veux.sh       # force-skip the post-build BOLT step
+#   BOLT_FDATA=vmlinux.fdata ./build_veux.sh   # PGO: use a BOLT profile
 #   PROFILE_GEN=1 ./build_veux.sh       # instrumented build for PGO
 #   PROFILE_USE=... ./build_veux.sh     # rebuild using profile
 #
@@ -160,10 +161,23 @@ make -j"$JOBS" \
 if [ "$BOLT_ENABLE" = "1" ] && [ -f vmlinux ]; then
     echo "== BOLT: optimizing vmlinux"
     cp -f vmlinux vmlinux.orig
+    BOLT_DATA_ARG=""
+    if [ -n "${BOLT_FDATA:-}" ] && [ -f "$BOLT_FDATA" ]; then
+        BOLT_DATA_ARG="-data=$BOLT_FDATA"
+        echo "== BOLT: using profile $BOLT_FDATA"
+    elif [ -n "${BOLT_FDATA:-}" ]; then
+        echo "WARNING: BOLT_FDATA=$BOLT_FDATA not found; running without profile" >&2
+    else
+        echo "== BOLT: no profile set (build one via collect_bolt_profile.sh, then BOLT_FDATA=vmlinux.fdata)"
+    fi
     if llvm-bolt vmlinux -o vmlinux.bolt \
-        -reorder-blocks=cache \
-        -split-functions=3 \
+        $BOLT_DATA_ARG \
+        -reorder-blocks=ext-tsp \
+        -reorder-functions=hfsort \
+        -split-functions \
+        -split-all-cold \
         -icf=1 \
+        -inline-all \
         -use-gnu-stack \
         -dyno-stats; then
         mv vmlinux.bolt vmlinux
