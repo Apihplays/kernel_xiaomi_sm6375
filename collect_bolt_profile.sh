@@ -25,18 +25,31 @@ set -euo pipefail
 
 DURATION="${1:-120}"
 VMLINUX="${2:-vmlinux}"
-PERF2BOLT="${PERF2BOLT:-perf2bolt}"
+
+if [ -n "${PERF2BOLT:-}" ]; then
+    :
+elif command -v perf2bolt >/dev/null 2>&1; then
+    PERF2BOLT="$(command -v perf2bolt)"
+else
+    for cand in \
+        /home/hayyan/toolchains/*/bin/perf2bolt \
+        "$HOME"/bin/perf2bolt \
+        "$HOME"/.local/bin/perf2bolt; do
+        [ -x "$cand" ] && { PERF2BOLT="$cand"; break; }
+    done
+fi
 
 if [ ! -f "$VMLINUX" ]; then
     echo "error: vmlinux not found at $VMLINUX" >&2
     exit 1
 fi
 
-if ! command -v "$PERF2BOLT" >/dev/null 2>&1; then
-    echo "error: perf2bolt not found. Use:" >&2
+if [ -z "${PERF2BOLT:-}" ] || [ ! -x "$PERF2BOLT" ]; then
+    echo "error: perf2bolt not found. Point it via PERF2BOLT=, e.g.:" >&2
     echo "  PERF2BOLT=/home/hayyan/toolchains/clang-r596125/bin/perf2bolt" >&2
     exit 1
 fi
+echo "== perf2bolt: $PERF2BOLT"
 
 # --- device reachable? rooted? ----------------------------------------------
 if ! adb get-state 2>/dev/null | grep -q device; then
