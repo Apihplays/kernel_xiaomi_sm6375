@@ -104,6 +104,11 @@ if grep -q "^CONFIG_LTO_CLANG=y" .config && grep -q "^# CONFIG_THINLTO is not se
     sed -i 's/^# CONFIG_THINLTO is not set$/CONFIG_THINLTO=y/' .config
 fi
 
+# --- 10.5 Disable DEBUG_INFO -----------------------------------------------
+# Full debug info + (Thin)LTO merge all DWARF into one .debug_info and the
+# final link overflows (R_AARCH64_ABS16 out of range). Same as CI: debug off.
+./scripts/config -d DEBUG_INFO
+
 # --- 11. Reconcile config non‑interactively --------------------------------
 make olddefconfig
 
