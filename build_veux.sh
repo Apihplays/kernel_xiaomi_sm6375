@@ -14,6 +14,8 @@
 #
 # Usage:
 #   ./build_veux.sh                     # normal build (always starts clean)
+#   LTO_MODE=full ./build_veux.sh       # full LTO instead of ThinLTO
+#   BOLT_ENABLE=0 ./build_veux.sh       # force-skip the post-build BOLT step
 #   PROFILE_GEN=1 ./build_veux.sh       # instrumented build for PGO
 #   PROFILE_USE=... ./build_veux.sh     # rebuild using profile
 #
@@ -44,6 +46,12 @@ JOBS=$(nproc --all)
 PROFILE_GEN="${PROFILE_GEN:-0}"
 PROFILE_USE="${PROFILE_USE:-}"
 
+# --- 3b. LTO mode -------------------------------------------------------------
+# thin = ThinLTO (default, lower link memory). full = full LTO, no ThinLTO --
+# stronger whole-program optimization, heavier on RAM during the final link.
+LTO_MODE="${LTO_MODE:-thin}"
+echo "== LTO mode: $LTO_MODE"
+
 # --- 4. Auto‑detect MLGO model ----------------------------------------------
 MLGO_MODEL="${MLGO_MODEL:-}"
 if [ -z "$MLGO_MODEL" ] && [ -f "$HOME/mlgo-model.mlgo" ]; then
@@ -52,12 +60,14 @@ if [ -z "$MLGO_MODEL" ] && [ -f "$HOME/mlgo-model.mlgo" ]; then
 fi
 
 # --- 5. Auto‑detect BOLT ----------------------------------------------------
-BOLT_ENABLE=0
-if command -v llvm-bolt &>/dev/null; then
-    BOLT_ENABLE=1
-    echo "== BOLT auto‑enabled (llvm-bolt found)"
+# BOLT_ENABLE=1 forces it on, BOLT_ENABLE=0 forces it off (auto only when
+# llvm-bolt is found). BOLT after (Thin)LTO is experimental on aarch64 and can
+# fail with ADRLiteral21 errors, so it defaults to off when LTO is active.
+BOLT_ENABLE="${BOLT_ENABLE:-0}"
+if [ "$BOLT_ENABLE" = "0" ]; then
+    echo "== BOLT disabled (BOLT_ENABLE=$BOLT_ENABLE)"
 else
-    echo "== BOLT not available (llvm-bolt not in PATH)"
+    echo "== BOLT enabled via BOLT_ENABLE=$BOLT_ENABLE"
 fi
 
 # --- 6. Base compiler flags (always safe) -----------------------------------
@@ -98,10 +108,18 @@ fi
 echo "== Generating veux_defconfig"
 make veux_defconfig
 
-# --- 10. Enable ThinLTO (always) ------------------------------------------
-if grep -q "^CONFIG_LTO_CLANG=y" .config && grep -q "^# CONFIG_THINLTO is not set" .config; then
-    echo "!! Enabling ThinLTO (replacing full LTO)"
-    sed -i 's/^# CONFIG_THINLTO is not set$/CONFIG_THINLTO=y/' .config
+# --- 10. LTO (ThinLTO by default; full LTO when LTO_MODE=full) ---------------
+if grep -q "^CONFIG_LTO_CLANG=y" .config; then
+    if [ "$LTO_MODE" = "full" ]; then
+        echo "!! Full LTO: keeping CONFIG_THINLTO disabled"
+    elif grep -q "^# CONFIG_THINLTO is not set" .config; then
+        echo "!! Enabling ThinLTO (replacing full LTO)"
+        sed -i 's/^# CONFIG_THINLTO is not set$/CONFIG_THINLTO=y/' .config
+    else
+        echo "?? ThinLTO already enabled"
+    fi
+else
+    echo "!! WARNING: CONFIG_LTO_CLANG is not enabled in .config -- LTO will be inactive"
 fi
 
 # --- 10.5 Disable DEBUG_INFO -----------------------------------------------
