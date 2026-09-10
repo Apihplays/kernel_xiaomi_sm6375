@@ -82,6 +82,13 @@ EXTRA_CFLAGS="-fno-builtin-wcslen -fno-strict-overflow -fno-merge-all-constants"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -ffunction-sections -fdata-sections"
 EXTRA_LDFLAGS="-gc-sections"
 
+# Keep relocations in vmlinux when BOLT is enabled: BOLT decodes/rewrites the
+# image better with `-q` (this is how the KernelBOLT recipe links).
+if [ "$BOLT_ENABLE" = "1" ]; then
+    EXTRA_LDFLAGS="$EXTRA_LDFLAGS -Wl,-q"
+    echo "== BOLT: adding -Wl,-q to keep relocations in vmlinux"
+fi
+
 # --- 7. PGO flags (only if explicitly requested) ----------------------------
 if [ "$PROFILE_GEN" = "1" ]; then
     echo "== PGO: building instrumented kernel (profile generation)"
@@ -108,8 +115,15 @@ fi
 echo "== Generating veux_defconfig"
 make veux_defconfig
 
-# --- 10. LTO (ThinLTO by default; full LTO when LTO_MODE=full) ---------------
-if grep -q "^CONFIG_LTO_CLANG=y" .config; then
+# --- 10. LTO mode (ThinLTO default; full; none) ------------------------------
+# none = CONFIG_LTO_CLANG disabled. Needed for BOLT on aarch64: LTO creates
+# /N function clones with anonymous symbols, and BOLT's JITLink fails on their
+# ADRP relocations (out of range of ADRLiteral21). Non-LTO + BOLT is the only
+# combo that reliably completes the pass.
+if [ "$LTO_MODE" = "none" ]; then
+    echo "!! LTO disabled (LTO_MODE=none) -- required for working BOLT"
+    ./scripts/config -d LTO_CLANG
+elif grep -q "^CONFIG_LTO_CLANG=y" .config; then
     if [ "$LTO_MODE" = "full" ]; then
         echo "!! Full LTO: keeping CONFIG_THINLTO disabled"
     elif grep -q "^# CONFIG_THINLTO is not set" .config; then
