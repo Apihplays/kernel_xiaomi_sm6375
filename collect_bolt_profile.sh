@@ -106,8 +106,8 @@ adb shell "su -c 'rm -f /data/local/tmp/perf.data'"
 echo "== pulled perf.data ($(stat -c%s perf.data) bytes)"
 
 # --- convert to BOLT profile ------------------------------------------------
-echo "== perf2bolt -p perf.data -o vmlinux.fdata $VMLINUX"
-perf2bolt -p perf.data -o vmlinux.fdata "$VMLINUX"
+echo "== $PERF2BOLT -p perf.data -o vmlinux.fdata $VMLINUX"
+"$PERF2BOLT" -p perf.data -o vmlinux.fdata "$VMLINUX"
 
 echo
 echo "Done. Rebuild with the profile now:"
