@@ -72,15 +72,31 @@ if adb shell "su -c 'echo -1 > /proc/sys/kernel/perf_event_paranoid'" 2>/dev/nul
 else
     echo "warning: could not set perf_event_paranoid; kernel samples may be dropped" >&2
 fi
+adb shell "su -c 'echo 0 > /proc/sys/kernel/kptr_restrict'" 2>/dev/null \
+    && echo "== kptr_restrict set to 0" || echo "  (kptr_restrict not writable)"
 
+# --- perf binary: device perf, else a pushed static perf ----------------------
+LOCAL_PERF="${LOCAL_PERF:-}"
+PERF_CMD="perf"
 if ! adb shell "su -c 'test -x /system/bin/perf && echo yes'" | grep -q yes; then
-    echo "warning: /system/bin/perf not found on device" >&2
+    echo "warning: /system/bin/perf missing on device -- using a static perf" >&2
+    if [ -z "$LOCAL_PERF" ] && [ -f "$(dirname "$0")/perf-static" ]; then
+        LOCAL_PERF="$(dirname "$0")/perf-static"
+    fi
+    if [ -z "$LOCAL_PERF" ] || [ ! -x "$LOCAL_PERF" ]; then
+        echo "error: need a static perf to push. Set LOCAL_PERF=/path/to/perf or put one at ./perf-static" >&2
+        exit 1
+    fi
+    echo "== pushing $LOCAL_PERF to /data/local/tmp/perf"
+    adb push "$LOCAL_PERF" /data/local/tmp/perf >/dev/null
+    adb shell "su -c 'chmod 755 /data/local/tmp/perf'"
+    PERF_CMD="/data/local/tmp/perf"
 fi
 
 # --- capture -----------------------------------------------------------------
 echo "== capturing ${DURATION}s system-wide (-a -g); exercise the phone now"
 adb shell "su -c 'rm -f /data/local/tmp/perf.data /data/local/tmp/perf.data.old'"
-if ! adb shell "su -c 'perf record -a -g -o /data/local/tmp/perf.data -- sleep ${DURATION}'"; then
+if ! adb shell "su -c '$PERF_CMD record -a -g -o /data/local/tmp/perf.data -- sleep ${DURATION}'"; then
     echo "error: perf record failed on device (run manually to see the reason)" >&2
     exit 1
 fi
