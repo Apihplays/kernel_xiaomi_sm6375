@@ -106,6 +106,11 @@ adb shell "su -c 'rm -f /data/local/tmp/perf.data'"
 echo "== pulled perf.data ($(stat -c%s perf.data) bytes)"
 
 # --- convert to BOLT profile ------------------------------------------------
+if ! command -v perf >/dev/null 2>&1; then
+    echo "error: perf2bolt needs a host 'perf' to decode perf.data; none found." >&2
+    echo "       Install it (openSUSE):  sudo zypper install perf" >&2
+    exit 1
+fi
 echo "== $PERF2BOLT -p perf.data -o vmlinux.fdata $VMLINUX"
 "$PERF2BOLT" -p perf.data -o vmlinux.fdata "$VMLINUX"
 
